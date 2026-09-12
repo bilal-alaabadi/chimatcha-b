@@ -681,7 +681,7 @@ router.post("/create-checkout-session", async (req, res) => {
     }
 
     const paymentLink =
-      `https://uatcheckout.thawani.om/pay/${sessionId}?key=${THAWANI_PUBLISH_KEY}`;
+      `https://checkout.thawani.om/pay/${sessionId}?key=${THAWANI_PUBLISH_KEY}`;
 
     return res.json({
       id: sessionId,
