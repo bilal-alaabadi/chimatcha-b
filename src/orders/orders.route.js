@@ -80,57 +80,312 @@ router.post("/create-checkout-session", async (req, res) => {
     giftCard,
     gulfCountry,
     deliveryType,
+    selectedArea,
+    effectiveArea,
   } = req.body;
 
-  const selectedDeliveryType =
-    country === "دول الخليج" ? "" : deliveryType === "مكتب" ? "مكتب" : "بيت";
+  const TWO_RIAL_HOME_AREAS = [
+    "بوشر",
+    "قريات",
+    "المعبيلة",
+    "العامرات",
+    "الخوض",
+    "مطرح",
+    "السيب",
 
-  const shippingFee =
+    "بركاء",
+    "الخابورة",
+    "الرستاق",
+    "صحار",
+    "صحم",
+    "السويق",
+    "لوى",
+    "شناص",
+    "المصنعة",
+    "نخل",
+
+    "سمد الشأن",
+    "بدية",
+    "إبراء",
+    "سناو",
+    "جعلان",
+    "صور",
+
+    "أدم",
+    "سمائل",
+    "إزكي",
+    "بهلاء",
+    "نزوى",
+    "الحمراء",
+    "منح",
+    "فنجاء",
+
+    "البريمي",
+    "صلالة",
+    "عبري",
+    "ينقل",
+  ];
+
+  const THREE_RIAL_HOME_AREAS = [
+    "مرمول",
+    "الشويمية",
+    "ثمريت",
+    "المزيونة",
+    "سدح",
+    "حاسك",
+    "شليم",
+
+    "مصيرة",
+
+    "هيما",
+    "الدقم",
+    "الجازر",
+    "محوت",
+
+    "خصب",
+    "بخاء",
+    "دبا",
+  ];
+
+  const OFFICE_AREAS = [
+    ...TWO_RIAL_HOME_AREAS,
+    "خصب",
+  ];
+
+  const normalizeArabic = (value = "") => {
+    return String(value)
+      .trim()
+      .toLowerCase()
+      .replace(/[أإآ]/g, "ا")
+      .replace(/ى/g, "ي")
+      .replace(/ة/g, "ه")
+      .replace(/ؤ/g, "و")
+      .replace(/ئ/g, "ي")
+      .replace(/[\u064B-\u065F]/g, "")
+      .replace(/\s+/g, " ");
+  };
+
+  const detectAreaFromAddress = (address) => {
+    if (!address) return "";
+
+    const normalizedAddress =
+      normalizeArabic(address);
+
+    const allAreas = [
+      ...THREE_RIAL_HOME_AREAS,
+      ...TWO_RIAL_HOME_AREAS,
+    ];
+
+    const foundArea =
+      allAreas.find((area) =>
+        normalizedAddress.includes(
+          normalizeArabic(area)
+        )
+      );
+
+    if (foundArea) {
+      return foundArea;
+    }
+
+    if (
+      normalizedAddress.includes("هيما") ||
+      normalizedAddress.includes("هيماء")
+    ) {
+      return "هيما";
+    }
+
+    return "";
+  };
+
+  const detectedArea =
+    detectAreaFromAddress(wilayat);
+
+  const finalEffectiveArea =
+    selectedArea ||
+    effectiveArea ||
+    detectedArea ||
+    "";
+
+  const selectedDeliveryType =
     country === "دول الخليج"
-      ? gulfCountry === "الإمارات"
+      ? ""
+      : deliveryType === "مكتب"
+      ? "مكتب"
+      : "بيت";
+
+  if (
+    country !== "دول الخليج" &&
+    selectedDeliveryType === "مكتب" &&
+    !OFFICE_AREAS.includes(
+      finalEffectiveArea
+    )
+  ) {
+    return res.status(400).json({
+      error:
+        "الاستلام من المكتب غير متوفر في هذه المنطقة.",
+    });
+  }
+
+  let shippingFee = 0;
+
+  if (country === "دول الخليج") {
+    shippingFee =
+      gulfCountry === "الإمارات"
         ? 4
-        : 5
-      : selectedDeliveryType === "مكتب"
-      ? 1
-      : 2;
+        : 5;
+  } else if (
+    selectedDeliveryType === "مكتب" &&
+    OFFICE_AREAS.includes(
+      finalEffectiveArea
+    )
+  ) {
+    shippingFee = 1;
+  } else if (
+    selectedDeliveryType === "بيت" &&
+    THREE_RIAL_HOME_AREAS.includes(
+      finalEffectiveArea
+    )
+  ) {
+    shippingFee = 3;
+  } else {
+    shippingFee = 2;
+  }
 
   const DEPOSIT_AMOUNT_OMR = 10;
 
-  if (!Array.isArray(products) || products.length === 0) {
-    return res.status(400).json({ error: "Invalid or empty products array" });
+  const toSafeBaisa = (amount) => {
+    const value = Number(amount);
+
+    if (!Number.isFinite(value)) {
+      return 100;
+    }
+
+    return Math.max(
+      100,
+      Math.round(value * 1000)
+    );
+  };
+
+  const safeProductName = (
+    name,
+    fallback = "Product"
+  ) => {
+    const value = String(
+      name || fallback
+    ).trim();
+
+    if (!value) {
+      return fallback;
+    }
+
+    return value.slice(0, 40);
+  };
+
+  if (
+    !Array.isArray(products) ||
+    products.length === 0
+  ) {
+    return res.status(400).json({
+      error:
+        "Invalid or empty products array",
+    });
+  }
+
+  if (products.length > 100) {
+    return res.status(400).json({
+      error:
+        "عدد المنتجات أكبر من الحد المسموح.",
+    });
   }
 
   try {
     for (const item of products) {
-      const productId = item._id || item.productId;
-      const orderedQty = Math.max(1, Number(item.quantity || 1));
-      const productInDb = await Products.findById(productId);
+      const productId =
+        item._id || item.productId;
+
+      const orderedQty =
+        Math.min(
+          100,
+          Math.max(
+            1,
+            Math.floor(
+              Number(
+                item.quantity || 1
+              )
+            )
+          )
+        );
+
+      const productInDb =
+        await Products.findById(
+          productId
+        );
 
       if (!productInDb) {
         return res.status(400).json({
-          error: `المنتج غير موجود: ${item.name}`,
+          error: `المنتج غير موجود: ${
+            item.name || ""
+          }`,
         });
       }
 
-      if (Number(productInDb.quantity || 0) < orderedQty) {
+      if (
+        Number(
+          productInDb.quantity || 0
+        ) < orderedQty
+      ) {
         return res.status(400).json({
-          error: `الكمية غير متوفرة للمنتج: ${item.name}`,
+          error: `الكمية غير متوفرة للمنتج: ${
+            item.name || ""
+          }`,
         });
       }
     }
 
-    const productsSubtotal = products.reduce(
-      (sum, p) => sum + Number(p.price || 0) * Number(p.quantity || 0),
-      0
-    );
+    const productsSubtotal =
+      products.reduce(
+        (sum, p) => {
+          const price =
+            Number(p.price || 0);
 
-    const totalPairDiscount = products.reduce(
-      (sum, p) => sum + pairDiscountForProduct(p),
-      0
-    );
+          const quantity =
+            Math.max(
+              1,
+              Number(
+                p.quantity || 1
+              )
+            );
 
-    const subtotalAfterDiscount = Math.max(0, productsSubtotal - totalPairDiscount);
-    const originalTotal = subtotalAfterDiscount + shippingFee;
+          return (
+            sum +
+            price * quantity
+          );
+        },
+        0
+      );
+
+    const totalPairDiscount =
+      products.reduce(
+        (sum, p) =>
+          sum +
+          Number(
+            pairDiscountForProduct(
+              p
+            ) || 0
+          ),
+        0
+      );
+
+    const subtotalAfterDiscount =
+      Math.max(
+        0,
+        productsSubtotal -
+          totalPairDiscount
+      );
+
+    const originalTotal =
+      subtotalAfterDiscount +
+      shippingFee;
 
     let lineItems = [];
     let amountToCharge = 0;
@@ -140,123 +395,331 @@ router.post("/create-checkout-session", async (req, res) => {
         {
           name: "دفعة مقدم",
           quantity: 1,
-          unit_amount: toBaisa(DEPOSIT_AMOUNT_OMR),
+          unit_amount:
+            toSafeBaisa(
+              DEPOSIT_AMOUNT_OMR
+            ),
         },
       ];
 
-      amountToCharge = DEPOSIT_AMOUNT_OMR;
+      amountToCharge =
+        DEPOSIT_AMOUNT_OMR;
     } else {
-      lineItems = products.map((p) => {
-        const unitBase = Number(p.price || 0);
-        const qty = Math.max(1, Number(p.quantity || 1));
-        const productDiscount = pairDiscountForProduct(p);
-        const unitAfterDiscount = Math.max(0.1, unitBase - productDiscount / qty);
+      lineItems = products.map(
+        (p) => {
+          const unitBase =
+            Number(
+              p.price || 0
+            );
 
-        return {
-          name: String(p.name || "منتج"),
-          quantity: qty,
-          unit_amount: toBaisa(unitAfterDiscount),
-        };
-      });
+          const qty =
+            Math.min(
+              100,
+              Math.max(
+                1,
+                Math.floor(
+                  Number(
+                    p.quantity || 1
+                  )
+                )
+              )
+            );
+
+          const productDiscount =
+            Number(
+              pairDiscountForProduct(
+                p
+              ) || 0
+            );
+
+          const unitAfterDiscount =
+            Math.max(
+              0.1,
+              unitBase -
+                productDiscount /
+                  qty
+            );
+
+          return {
+            name:
+              safeProductName(
+                p.name,
+                "Product"
+              ),
+
+            quantity: qty,
+
+            unit_amount:
+              toSafeBaisa(
+                unitAfterDiscount
+              ),
+          };
+        }
+      );
 
       lineItems.push({
         name: "رسوم الشحن",
         quantity: 1,
-        unit_amount: toBaisa(shippingFee),
+        unit_amount:
+          toSafeBaisa(
+            shippingFee
+          ),
       });
 
-      amountToCharge = originalTotal;
+      amountToCharge =
+        originalTotal;
     }
 
-    const nowId = Date.now().toString();
+    for (const item of lineItems) {
+      if (
+        !item.name ||
+        item.name.length > 40 ||
+        !Number.isInteger(
+          item.quantity
+        ) ||
+        item.quantity < 1 ||
+        item.quantity > 100 ||
+        !Number.isInteger(
+          item.unit_amount
+        ) ||
+        item.unit_amount < 100
+      ) {
+        console.error(
+          "Invalid Thawani product:",
+          item
+        );
+
+        return res
+          .status(400)
+          .json({
+            error:
+              "بيانات المنتج غير صالحة للدفع.",
+            details: item,
+          });
+      }
+    }
+
+    const nowId =
+      Date.now().toString();
 
     const orderPayload = {
       orderId: nowId,
-      products: products.map((p) => ({
-        productId: p._id || p.productId,
-        quantity: p.quantity,
-        name: p.name,
-        price: p.price,
-        image: Array.isArray(p.image) ? p.image[0] : p.image,
-        measurements: p.measurements || {},
-        category: p.category || "",
-        giftCard: normalizeGift(p.giftCard) || undefined,
-      })),
+
+      products:
+        products.map((p) => ({
+          productId:
+            p._id ||
+            p.productId,
+
+          quantity:
+            p.quantity,
+
+          name:
+            p.name,
+
+          price:
+            p.price,
+
+          image:
+            Array.isArray(
+              p.image
+            )
+              ? p.image[0]
+              : p.image,
+
+          measurements:
+            p.measurements || {},
+
+          category:
+            p.category || "",
+
+          giftCard:
+            normalizeGift(
+              p.giftCard
+            ) || undefined,
+        })),
+
       amountToCharge,
+
       shippingFee,
+
       customerName,
+
       customerPhone,
+
       country,
+
       gulfCountry,
-      deliveryType: selectedDeliveryType,
+
+      deliveryType:
+        selectedDeliveryType,
+
+      selectedArea:
+        selectedArea || "",
+
+      effectiveArea:
+        finalEffectiveArea,
+
       wilayat,
+
       description,
-      email: email || "",
-      status: "completed",
-      depositMode: !!depositMode,
-      remainingAmount: depositMode
-        ? Math.max(0, originalTotal - DEPOSIT_AMOUNT_OMR)
-        : 0,
-      giftCard: normalizeGift(giftCard),
+
+      email:
+        email || "",
+
+      status:
+        "completed",
+
+      depositMode:
+        !!depositMode,
+
+      remainingAmount:
+        depositMode
+          ? Math.max(
+              0,
+              originalTotal -
+                DEPOSIT_AMOUNT_OMR
+            )
+          : 0,
+
+      giftCard:
+        normalizeGift(giftCard),
     };
 
-    ORDER_CACHE.set(nowId, orderPayload);
+    ORDER_CACHE.set(
+      nowId,
+      orderPayload
+    );
 
-    const data = {
-      client_reference_id: nowId,
-      mode: "payment",
-      products: lineItems,
+    const thawaniData = {
+      client_reference_id:
+        String(nowId),
+
+      mode:
+        "payment",
+
+      products:
+        lineItems,
+
       success_url:
-        "https://www.chi-matcha.com/SuccessRedirect?client_reference_id=" + nowId,
-      cancel_url: "https://www.chi-matcha.com/cancel",
+        "https://www.chi-matcha.com/SuccessRedirect?client_reference_id=" +
+        nowId,
+
+      cancel_url:
+        "https://www.chi-matcha.com/cancel",
+
       metadata: {
-        email: String(email || "غير محدد"),
-        customer_name: String(customerName || ""),
-        customer_phone: String(customerPhone || ""),
-        country: String(country || ""),
-        wilayat: String(wilayat || ""),
-        description: String(description || "لا يوجد وصف"),
-        shippingFee: String(shippingFee),
-        internal_order_id: String(nowId),
-        source: "mern-backend",
+        order_id:
+          String(nowId),
+
+        customer_name:
+          String(
+            customerName || ""
+          ).slice(0, 100),
+
+        customer_phone:
+          String(
+            customerPhone || ""
+          ).slice(0, 30),
+
+        customer_email:
+          String(
+            email || ""
+          ).slice(0, 100),
       },
     };
 
-    const response = await axios.post(
-      `${THAWANI_API_URL}/checkout/session`,
-      data,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "thawani-api-key": THAWANI_API_KEY,
-        },
-      }
+    console.log(
+      "THAWANI REQUEST:",
+      JSON.stringify(
+        thawaniData,
+        null,
+        2
+      )
     );
 
-    const sessionId = response?.data?.data?.session_id;
+    const response =
+      await axios.post(
+        `${THAWANI_API_URL}/checkout/session`,
+        thawaniData,
+        {
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            "thawani-api-key":
+              THAWANI_API_KEY,
+          },
+
+          timeout: 30000,
+        }
+      );
+
+    console.log(
+      "THAWANI RESPONSE:",
+      response.data
+    );
+
+    const sessionId =
+      response?.data?.data
+        ?.session_id;
 
     if (!sessionId) {
-      ORDER_CACHE.delete(nowId);
+      ORDER_CACHE.delete(
+        nowId
+      );
 
-      return res.status(500).json({
-        error: "No session_id returned from Thawani",
-        details: response?.data,
-      });
+      return res
+        .status(500)
+        .json({
+          error:
+            "No session_id returned from Thawani",
+
+          details:
+            response?.data,
+        });
     }
 
-    const paymentLink = `https://checkout.thawani.om/pay/${sessionId}?key=${THAWANI_PUBLISH_KEY}`;
+    const paymentLink =
+      `https://uatcheckout.thawani.om/pay/${sessionId}?key=${THAWANI_PUBLISH_KEY}`;
 
-    res.json({ id: sessionId, paymentLink });
+    return res.json({
+      id: sessionId,
+      paymentLink,
+    });
   } catch (error) {
-    console.error("Error creating checkout session:", error?.response?.data || error);
+    console.error(
+      "THAWANI ERROR STATUS:",
+      error?.response?.status
+    );
 
-    res.status(500).json({
-      error: "Failed to create checkout session",
-      details: error?.response?.data || error.message,
+    console.error(
+      "THAWANI ERROR DATA:",
+      JSON.stringify(
+        error?.response?.data ||
+          {},
+        null,
+        2
+      )
+    );
+
+    console.error(
+      "THAWANI ERROR MESSAGE:",
+      error.message
+    );
+
+    return res.status(500).json({
+      error:
+        error?.response?.data
+          ?.description ||
+        "Failed to create checkout session",
+
+      details:
+        error?.response?.data ||
+        error.message,
     });
   }
 });
-
 router.post("/confirm-payment", async (req, res) => {
   const { client_reference_id } = req.body;
 
